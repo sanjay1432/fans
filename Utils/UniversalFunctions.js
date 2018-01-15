@@ -1,0 +1,386 @@
+/**
+ * Created by shahab on 10/7/15.
+ */
+var Joi = require('joi');
+var async = require('async');
+var MD5 = require('md5');
+var Boom = require('boom');
+var CONFIG = require('../Config');
+var Models = require('../Models');
+var randomstring = require("randomstring");
+var GeoPoint = require('geopoint');
+var distance = require('google-distance-matrix');
+distance.key(CONFIG.APP_CONSTANTS.SERVER.GOOGLE_API_KEY);
+var NotificationManager = require('../Lib/NotificationManager');
+var validator = require('validator');
+var emailExistence = require('email-existence');
+
+
+var VALID_ERRAND_STATUS_ARRAY = [];
+for (var key in CONFIG.APP_CONSTANTS.DATABASE.ERRANDS_STATUS) {
+    if (CONFIG.APP_CONSTANTS.DATABASE.ERRANDS_STATUS.hasOwnProperty(key)) {
+        VALID_ERRAND_STATUS_ARRAY.push(CONFIG.APP_CONSTANTS.DATABASE.ERRANDS_STATUS[key])
+    }
+}
+
+var calculateDeliveryCost = function (originLatlong, destLatLong, callback) {
+    var estimatedCost = CONFIG.APP_CONSTANTS.SERVER.BASE_DELIVERY_FEE;
+    calculateDistanceViaGoogleDistanceMatrix(originLatlong, destLatLong, function (err, distanceInMiles) {
+        console.log('distances', err, distanceInMiles)
+        if (err) {
+            callback(err)
+        } else {
+            distanceInMiles = distanceInMiles && distanceInMiles.toFixed() || 0;
+            estimatedCost = estimatedCost + distanceInMiles * CONFIG.APP_CONSTANTS.SERVER.COST_PER_KM;
+            callback(null, estimatedCost)
+        }
+    })
+};
+
+var calculateDistanceViaGoogleDistanceMatrix = function (origin, destination, callback) {
+    var origins = [origin];
+    var destinations = [destination];
+    var duration = null;
+
+    distance.matrix(origins, destinations, function (err, distances) {
+        if (err) {
+            callback(err)
+        } else if (distances.status == 'OK' && distances.rows && distances.rows[0] && distances.rows[0].elements
+            && distances.rows[0].elements[0] && distances.rows[0].elements[0].duration && distances.rows[0].elements[0].duration.hasOwnProperty('value')) {
+            duration = (distances.rows[0].elements[0].duration.value) / 60;
+        }
+        callback(null, duration);
+    });
+};
+
+var sendError = function (data) {
+    console.trace('ERROR OCCURED ', data)
+    if (typeof data == 'object' && data.hasOwnProperty('statusCode') && data.hasOwnProperty('customMessage')) {
+        console.log('attaching resposnetype', data.type)
+        var errorToSend = Boom.create(data.statusCode, data.customMessage);
+        errorToSend.output.payload.responseType = data.type;
+        return errorToSend;
+    } else {
+        var errorToSend = '';
+        if (typeof data == 'object') {
+            if (data.name == 'MongoError') {
+                errorToSend += CONFIG.APP_CONSTANTS.STATUS_MSG.ERROR.DB_ERROR.customMessage;
+                if (data.code = 11000) {
+                    var duplicateValue = data.errmsg && data.errmsg.substr(data.errmsg.lastIndexOf('{ : "') + 5);
+                    duplicateValue = duplicateValue.replace('}', '');
+                    errorToSend += CONFIG.APP_CONSTANTS.STATUS_MSG.ERROR.DUPLICATE.customMessage + " : " + duplicateValue;
+                    if (data.message.indexOf('customer_1_streetAddress_1_city_1_state_1_country_1_zip_1') > -1) {
+                        errorToSend = CONFIG.APP_CONSTANTS.STATUS_MSG.ERROR.DUPLICATE_ADDRESS.customMessage;
+                    }
+                }
+            } else if (data.name == 'ApplicationError') {
+                errorToSend += CONFIG.APP_CONSTANTS.STATUS_MSG.ERROR.APP_ERROR.customMessage + ' : ';
+            } else if (data.name == 'ValidationError') {
+                errorToSend += CONFIG.APP_CONSTANTS.STATUS_MSG.ERROR.APP_ERROR.customMessage + data.message;
+            } else if (data.name == 'CastError') {
+                errorToSend += CONFIG.APP_CONSTANTS.STATUS_MSG.ERROR.DB_ERROR.customMessage + CONFIG.APP_CONSTANTS.STATUS_MSG.ERROR.INVALID_ID.customMessage + data.value;
+            }
+        } else {
+            errorToSend = data
+        }
+        var customErrorMessage = errorToSend;
+        if (typeof customErrorMessage == 'string') {
+            if (errorToSend.indexOf("[") > -1) {
+                customErrorMessage = errorToSend.substr(errorToSend.indexOf("["));
+            }
+            customErrorMessage = customErrorMessage && customErrorMessage.replace(/"/g, '');
+            customErrorMessage = customErrorMessage && customErrorMessage.replace('[', '');
+            customErrorMessage = customErrorMessage && customErrorMessage.replace(']', '');
+        }
+        return Boom.create(400, customErrorMessage)
+    }
+};
+
+var sendSuccess = function (successMsg, data) {
+    successMsg = successMsg || CONFIG.APP_CONSTANTS.STATUS_MSG.SUCCESS.DEFAULT.customMessage;
+    if (typeof successMsg == 'object' && successMsg.hasOwnProperty('statusCode') && successMsg.hasOwnProperty('customMessage')) {
+        return { statusCode: successMsg.statusCode, message: successMsg.customMessage, data: data || null };
+
+    } else {
+        return { statusCode: 200, message: successMsg, data: data || null };
+
+    }
+};
+
+var checkDuplicateValuesInArray = function (array) {
+    console.log('array', array)
+    var storeArray = [];
+    var duplicateFlag = false;
+    if (array && array.length > 0) {
+        for (var i = 0; i < array.length; i++) {
+            if (storeArray.indexOf(array[i]) == -1) {
+                console.log('push', array[i])
+                storeArray.push(array[i])
+            } else {
+                console.log('break')
+                duplicateFlag = true;
+                break;
+            }
+        }
+    }
+    storeArray = [];
+    return duplicateFlag;
+};
+
+var failActionFunction = function (request, reply, source, error) {
+    var customErrorMessage = '';
+    if (error.output.payload.message.indexOf("[") > -1) {
+        customErrorMessage = error.output.payload.message.substr(error.output.payload.message.indexOf("["));
+    } else {
+        customErrorMessage = error.output.payload.message;
+    }
+
+    customErrorMessage = customErrorMessage.replace(/"/g, '');
+    customErrorMessage = customErrorMessage.replace('[', '');
+    customErrorMessage = customErrorMessage.replace(']', '');
+    error.output.payload.message = customErrorMessage;
+    if (error.output.payload.validation.keys.indexOf('password') > -1)
+        error.output.payload.message = "Password must be at least 6 characters long";
+    delete error.output.payload.validation
+    return reply(error);
+};
+
+
+var customQueryDataValidations = function (type, key, data, callback) {
+    var schema = {};
+    switch (type) {
+        case 'PHONE_NO': schema[key] = Joi.string().regex(/^[0-9]+$/).length(10);
+            break;
+        case 'NAME': schema[key] = Joi.string().regex(/^[a-zA-Z ]+$/).min(2);
+            break;
+        case 'BOOLEAN': schema[key] = Joi.boolean();
+            break;
+    }
+    var value = {};
+    value[key] = data;
+
+    Joi.validate(value, schema, callback);
+};
+
+
+var authorizationHeaderObj = Joi.object({
+    authorization: Joi.string().required()
+}).unknown();
+
+var getEmbeddedDataFromMongo = function (dataAry, keyToSearch, referenceIdToSearch, embeddedFieldModelName, variableToAttach, callback) {
+    if (!dataAry || !keyToSearch || !variableToAttach || !embeddedFieldModelName || !Models[embeddedFieldModelName]) {
+        callback(CONFIG.APP_CONSTANTS.STATUS_MSG.ERROR.IMP_ERROR)
+    } else {
+        if (dataAry.length > 0) {
+            var taskToRunInParallel = [];
+            dataAry.forEach(function (dataObj) {
+                taskToRunInParallel.push((function (dataObj) {
+                    return function (embeddedCB) {
+                        if (!dataObj[referenceIdToSearch]) {
+                            callback(CONFIG.APP_CONSTANTS.STATUS_MSG.ERROR.IMP_ERROR)
+                        } else {
+                            var criteria = {};
+                            criteria[keyToSearch] = dataObj[referenceIdToSearch];
+                            Models[embeddedFieldModelName].find(criteria, function (err, modelDataAry) {
+                                if (err) {
+                                    embeddedCB(err)
+                                } else {
+                                    if (modelDataAry) {
+                                        dataObj[variableToAttach] = modelDataAry
+                                    }
+                                    embeddedCB()
+                                }
+                            })
+                        }
+
+                    }
+                })(dataObj));
+            });
+
+            async.parallel(taskToRunInParallel, function (err, result) {
+                if (err) {
+                    callback(err)
+                } else {
+                    callback(null, dataAry)
+                }
+            })
+
+        } else {
+            callback(null, dataAry)
+        }
+    }
+};
+
+var CryptData = function (stringToCrypt) {
+    return MD5(MD5(stringToCrypt));
+};
+
+var generateRandomString = function () {
+    return randomstring.generate(7);
+};
+
+var filterArray = function (array) {
+    return array.filter(function (n) {
+        return n != undefined && n != ''
+    });
+};
+
+var sanitizeName = function (string) {
+    return filterArray(string && string.split(' ') || []).join(' ')
+};
+
+var verifyEmailFormat = function (string) {
+    return validator.isEmail(string)
+};
+
+var getFileNameWithUserId = function (thumbFlag, fullFileName, userId) {
+    var prefix = CONFIG.APP_CONSTANTS.DATABASE.PROFILE_PIC_PREFIX.ORIGINAL;
+    var ext = fullFileName && fullFileName.length > 0 && fullFileName.substr(fullFileName.lastIndexOf('.') || 0, fullFileName.length);
+    if (thumbFlag) {
+        prefix = CONFIG.APP_CONSTANTS.DATABASE.PROFILE_PIC_PREFIX.THUMB;
+    }
+    var rand = generateRandomString();
+    return prefix + userId + rand + ext;
+};
+
+var getFileNameWithUserIdWithCustomPrefix = function (thumbFlag, fullFileName, type, userId) {
+    console.log("userId241", userId);
+    var prefix = '';
+    if (type == CONFIG.APP_CONSTANTS.DATABASE.FILE_TYPES.LOGO) {
+        prefix = CONFIG.APP_CONSTANTS.DATABASE.LOGO_PREFIX.ORIGINAL;
+    } else if (type == CONFIG.APP_CONSTANTS.DATABASE.FILE_TYPES.DOCUMENT) {
+        prefix = CONFIG.APP_CONSTANTS.DATABASE.DOCUMENT_PREFIX;
+    }
+    var ext = fullFileName && fullFileName.length > 0 && fullFileName.substr(fullFileName.lastIndexOf('.') || 0, fullFileName.length);
+    if (thumbFlag && type == CONFIG.APP_CONSTANTS.DATABASE.FILE_TYPES.LOGO) {
+        prefix = CONFIG.APP_CONSTANTS.DATABASE.LOGO_PREFIX.THUMB;
+    }
+    var rand = generateRandomString();
+    return prefix + userId + rand + ext;
+};
+
+var getDistanceBetweenPoints = function (origin, destination) {
+    var start = new GeoPoint(origin.lat, origin.long);
+    var end = new GeoPoint(destination.lat, destination.long);
+    return start.distanceTo(end, true);
+};
+
+var validateLatLongValues = function (lat, long) {
+    var valid = true;
+    if (lat < -90 || lat > 90) {
+        valid = false;
+    }
+    if (long < -180 || long > 180) {
+        valid = false;
+    }
+    return valid;
+};
+var deleteUnnecessaryUserData = function (userObj) {
+    console.log('deleting>>', userObj)
+    delete userObj['__v'];
+    delete userObj['password'];
+    delete userObj['accessToken'];
+    delete userObj['emailVerificationToken'];
+    delete userObj['passwordResetToken'];
+    delete userObj['registrationDate'];
+    delete userObj['OTPCode'];
+    delete userObj['facebookId'];
+    delete userObj['codeUpdatedAt'];
+    delete userObj['deviceType'];
+    delete userObj['deviceToken'];
+    delete userObj['appVersion'];
+    delete userObj['isBlocked'];
+    console.log('deleted', userObj)
+    return userObj;
+};
+
+var deleteUnnecessaryCharityData = function (supplierObj) {
+    //console.log('deleting>>',supplierObj)
+    delete supplierObj['__v'];
+    delete supplierObj['passwordHash'];
+    delete supplierObj['accessToken'];
+    delete supplierObj['createdOn'];
+    delete supplierObj['loggedInOn'];
+    delete supplierObj['updatedOn'];
+    delete supplierObj['_id'];
+    delete supplierObj['createdOn'];
+    delete supplierObj['charityOwnerId'];
+    delete supplierObj['__v'];
+    delete supplierObj['foundationDate'];
+    delete supplierObj['bankAccountNumber'];
+    delete supplierObj['bankAccountHolderPhoneNumber'];
+    delete supplierObj['bankAccountHolderName'];
+    delete supplierObj['campaignId'];
+    delete supplierObj['deviceType'];
+    delete supplierObj['deviceToken'];
+    delete supplierObj['appVersion'];
+    return supplierObj;
+};
+
+var deleteUnnecessaryDonorData = function (supplierObj) {
+    //console.log('deleting>>',supplierObj)
+    delete supplierObj['__v'];
+    delete supplierObj['accessToken'];
+    delete supplierObj['passwordHash'];
+    delete supplierObj['createdOn'];
+    delete supplierObj['loggedInOn'];
+    delete supplierObj['updatedOn'];
+    delete supplierObj['donation'];
+    delete supplierObj['onceLogin'];
+    delete supplierObj['deviceType'];
+    delete supplierObj['deviceToken'];
+    delete supplierObj['appVersion'];
+    return supplierObj;
+};
+
+var checkEmailExists = function (emailId, callback) {
+    emailExistence.check(emailId, function (err, res) {
+        console.log('res: ' + res);
+        callback(res);
+    });
+}
+// YYYY-MM-DD HH:MM
+var convertStringToDate = function (stringDate) {
+    if (stringDate != undefined &&  stringDate != '') {
+
+        var parts = stringDate.split(' ');
+        var dateParts = parts[0].split('-');
+        var timeParts = parts[1].split(':');
+        //please put attention to the month (parts[0]), Javascript counts months from 0:
+        // January - 0, February - 1, etc
+        var seconds = timeParts.length > 2 ? timeParts[2]:0;
+        var date = new Date(dateParts[0], dateParts[1] - 1, dateParts[2], timeParts[0], timeParts[1], seconds);
+        var UTCDate = new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), date.getUTCHours(), date.getUTCMinutes(), date.getUTCSeconds());
+        return UTCDate;
+    }else{
+        return null;
+    }
+}
+
+module.exports = {
+    sendError: sendError,
+    sendSuccess: sendSuccess,
+    calculateDeliveryCost: calculateDeliveryCost,
+    checkDuplicateValuesInArray: checkDuplicateValuesInArray,
+    CryptData: CryptData,
+    failActionFunction: failActionFunction,
+    NotificationManager: NotificationManager,
+    authorizationHeaderObj: authorizationHeaderObj,
+    getEmbeddedDataFromMongo: getEmbeddedDataFromMongo,
+    verifyEmailFormat: verifyEmailFormat,
+    sanitizeName: sanitizeName,
+    deleteUnnecessaryUserData: deleteUnnecessaryUserData,
+    deleteUnnecessaryCharityData: deleteUnnecessaryCharityData,
+    deleteUnnecessaryDonorData: deleteUnnecessaryDonorData,
+    getDistanceBetweenPoints: getDistanceBetweenPoints,
+    validateLatLongValues: validateLatLongValues,
+    filterArray: filterArray,
+    CONFIG: CONFIG,
+    VALID_ERRAND_STATUS_ARRAY: VALID_ERRAND_STATUS_ARRAY,
+    generateRandomString: generateRandomString,
+    getFileNameWithUserId: getFileNameWithUserId,
+    getFileNameWithUserIdWithCustomPrefix: getFileNameWithUserIdWithCustomPrefix,
+    customQueryDataValidations: customQueryDataValidations,
+    checkEmailExists: checkEmailExists,
+    convertStringToDate: convertStringToDate
+};

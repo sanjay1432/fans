@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+
+<head lang="en">
+    <meta charset="UTF-8">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <!--
+    <script src="/primus/primus.js"></script>
+-->
+    <script>
+        var counter = 1;
+          
+      
+
+        $(document).on('click', '#myButton', function (e) {
+            console.log('button clickeed')
+            e.preventDefault();
+            e.stopPropagation();
+            // connect to current URL
+
+            var socket = io.connect();
+            console.log("Connected!");
+            socket.on("connect", function () {
+                // socket.emit('rename group' , {userId :  $("#token").val(), groupId : $("#groupId").val(), name :  $("#msg").val() })                
+                // socket.emit('add member' , {userId :  $("#token").val(), groupId : $("#groupId").val(), memberId :  $("#msg").val() })
+                // socket.emit('create group' , {userId :  $("#token").val(), members : $("#groupId").val(), name :  $("#msg").val() })
+                // socket.emit('add user', { userId: $("#token").val(), phoneNo: $("#topicId").val() });
+               socket.emit('read message',{ userId: $("#token").val(), groupId : $("#groupId").val(), messageId :  $("#msg").val() })
+               
+                console.log("Connected!");
+                // var row = "<tr>"
+                //     + "<td>" + counter++ + "</td>"
+                //     + "<td>" + new Date() + "</td>"
+                //     + "<td> Connected To Server </td>"
+                //     + "</tr>";
+                // $("table#NotificationTable > tbody").append(row);
+                // socket.emit('messageFromClient', {token: $("#token").val()});
+                // socket.emit('createRoom', { userId: $("#token").val(), topicId: $("#topicId").val() });
+               
+                // socket.emit('add contacts', { userId :$('#token').val(), contacts : $('#contacts').val()});
+                // socket.emit('userStatus', { userId :$('#token').val()});
+                // socket.emit('isActive', { userId :$('#token').val()});
+                console.log('create group called' );
+                
+            })
+
+            // socket.on("joinedRoom", function (data) {
+            //     var row = '';
+            //     if (data.performAction = 'LOCATION_UPDATE') {
+            //         row = "<tr>"
+            //             + "<td>" + counter++ + "</td>"
+            //             + "<td>" + new Date() + "</td>"
+            //             + "<td> " + JSON.stringify(data.message) + " </td>"
+            //             + "<td> " + data.roomNo + " </td>"
+            //             + "<td> " + data.clientCountEachRoom + " </td>"
+            //             + "</tr>";
+            //     } else {
+            //         row = "<tr>"
+            //             + "<td>" + counter++ + "</td>"
+            //             + "<td>" + new Date() + "</td>"
+            //             + "<td> " + data.message + " </td>"
+            //             + "<td> " + data.roomNo + " </td>"
+            //             + "<td> " + data.clientCountEachRoom + " </td>"
+            //             + "</tr>";
+            //     }
+            //     $("table#NotificationTable > tbody").append(row);
+            // });
+            socket.on("messageReplyAddUser", function (data) {
+                var row = '';
+
+               row = "<tr>"
+                    + "<td>" + counter++ + "</td>"
+
+                    + "</tr>";
+                $("table#MessageReceived > tbody").append(row);
+                socket.emit('register group', {userId : $("#token").val(), groupId : $("#groupId").val()});
+            });
+            socket.on("getGroupDetail",function(data){
+                var row = '';
+                row = "<tr>"
+                    + "<td>" + "getGroupDetail"+ data +"</td>"
+                    +"</tr>"
+                $("table#UserGroupDetail > tbody").append(row);
+            })
+
+        });
+
+        $(document).on('click', '#myButton1', function (e) {
+            console.log('button1 clickeed')
+            e.preventDefault();
+            e.stopPropagation();
+            // connect to current URL
+
+            var socket = io.connect();
+            // socket.emit('send message', { userId: $("#token").val(), groupId: $("#groupId").val(), msg: $("#msg").val(), type: $("#type").val() });
+            // socket.on("connect", function () {
+            //     console.log("Connected!");
+            //     var row = "<tr>"
+            //         + "<td>" + counter++ + "</td>"
+            //         + "<td>" + new Date() + "</td>"
+            //         + "<td> Connected To Server </td>"
+            //         + "</tr>";
+            //     $("table#NotificationTable > tbody").append(row);
+            //     // socket.emit('messageFromClient', {token: $("#token").val()});
+            //     // socket.emit('createRoom', { userId: $("#token").val(), topicId: $("#topicId").val() });
+            //     socket.emit('add user', { userId: $("#token").val(), phoneNo: $("#topicId").val() });
+            // })
+
+        
+
+            socket.on("receive message", function (data) {
+                var row = '';
+
+                row = "<tr>"
+                    + "<td>" + counter++ + "</td>"
+                    + "<td>" + new Date() + "</td>"
+                    + "<td>" + data.message.msg + "</td>"
+                    + "<td> " + data.msg + " </td>"
+
+                    + "</tr>";
+                $("table#MessageReceived > tbody").append(row);
+            });
+
+
+
+        });
+    </script>
+    <title>Seed Project</title>
+</head>
+
+<body>
+        <form action="/api/fanspick/uploadFile" method="post" enctype="multipart/form-data">
+            <input type="file" name="file">
+            <input type="submit" value="Upload">
+            </form>
+    Welcome to Seed Project Token : <input type="text" id="token" value="" /> topicId : <input type="text" id="topicId" value=""
+    />
+    </br>
+    GroupId : <input type="text" id="groupId" value="" />  Message :
+    <input type="text" id="msg" value="" /> Type : <input type="text" id="type" value="" />
+    <br/>
+    Contacts : <input type="text" id="contacts" value=""/></br>
+    <button id="myButton">Send Token</button><button id="myButton1">create group</button>
+    <table border="1" id="NotificationTable">
+        <thead>
+            <th>S.no</th>
+            <th>Time</th>
+            <th>Event</th>
+        </thead>
+        <tbody>
+
+        </tbody>
+    </table>
+    <table border="1" id="MessageReceived">
+        <thead>
+            <th>S.no</th>
+            <th>Time</th>
+            <th>msg</th>
+        </thead>
+        <tbody>
+
+        </tbody>
+    </table>
+
+    </br>
+    </br>
+    <table border="1" id="UserGroupDetail">
+        <thead>
+            <th>S.no</th>
+            <th>Time</th>
+            <th>msg</th>
+        </thead>
+        <tbody>
+
+        </tbody>
+    </table>
+</body>
+
+</html>

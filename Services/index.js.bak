@@ -1,0 +1,13 @@
+/**
+ * Created by Amit.
+ */
+module.exports = {
+    FanspickService: require('./FanspickService'),
+    AdminService: require('./AdminService'),
+    AppVersionService: require('./AppVersionService'),
+    SocketService: require('./SocketService'),
+    GradingService: require('./GradingService'),
+    UserNotificationService: require('./UserNotificationService'),
+    notificationResponseService: require('./notificationResponseService'),
+    userFixtureService: require('./userFixtureService')
+};
